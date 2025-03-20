@@ -8,7 +8,6 @@ const WordCollectorGame = () => {
   const [highScores, setHighScores] = useState([]);
   const [gameOver, setGameOver] = useState(false);
   const [currentWord, setCurrentWord] = useState([]);
-  const [garbageCan, setGarbageCan] = useState([]);
   const [fallingElements, setFallingElements] = useState([]);
   const [wordIsValid, setWordIsValid] = useState(false);
   const [gameStarted, setGameStarted] = useState(false);
@@ -31,7 +30,6 @@ const WordCollectorGame = () => {
   const generationLoopRef = useRef(null);
   const requestRef = useRef(null);
   const timerRef = useRef(null);
-  const garbageCapacity = 10;
   
   // Word validation function - requiring at least 3 letters
   const isValidWord = (word) => {
@@ -93,7 +91,6 @@ const WordCollectorGame = () => {
     setScore(100);
     setCurrentWord([]);
     setFallingElements([]);
-    setGarbageCan([]);
     setDifficulty(1);
     setFallSpeedMultiplier(1.0);
     
@@ -355,22 +352,6 @@ const WordCollectorGame = () => {
     
     if (!element) return;
     
-    // Check for double click (300ms window)
-    if (lastClick.id === elementId && now - lastClick.time < 300) {
-      // This is a double click - add to garbage
-      if (garbageCan.length < garbageCapacity) {
-        setGarbageCan(prev => [...prev, element]);
-        setFallingElements(prev => prev.filter(el => el.id !== elementId));
-        
-        // If the element was part of the current word, remove it
-        if (element.selected) {
-          setCurrentWord(prev => prev.filter(word => word.id !== elementId));
-        }
-      }
-      setLastClick({ id: null, time: 0 }); // Reset double click detection
-      return;
-    }
-    
     // Update last click for double click detection
     setLastClick({ id: elementId, time: now });
     
@@ -440,8 +421,8 @@ const WordCollectorGame = () => {
         <div className="text-center">
           <h1 className="title">Word Collector</h1>
           <p className="description">
-            Tap falling letters to create words. Double-tap to discard unwanted letters.
-            Drag letters to move them around. Don't let them hit the bottom!
+            Tap falling letters to create words. Drag letters to move them around.
+            Don't let them hit the bottom!
           </p>
           <button 
             onClick={startGame}
@@ -574,22 +555,6 @@ const WordCollectorGame = () => {
                 <span className="element-value">{element.value}</span>
               </div>
             ))}
-            
-            {/* Garbage Can */}
-            <div className="garbage-can">
-              <div className="garbage-count">
-                {garbageCan.length}/{garbageCapacity}
-              </div>
-              
-              {garbageCan.map((item, index) => (
-                <div 
-                  key={item.id}
-                  className="garbage-item"
-                >
-                  {item.part}
-                </div>
-              ))}
-            </div>
           </div>
           
           {/* Word Building Area */}
@@ -619,10 +584,6 @@ const WordCollectorGame = () => {
                       : 'Keep building your word... (need at least 3 letters)'}
                   </span>
                 )}
-              </div>
-              
-              <div className="hint">
-                Double-tap to discard
               </div>
             </div>
           </div>
