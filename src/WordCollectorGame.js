@@ -129,7 +129,6 @@ const WordCollectorGame = () => {
     cancelAnimationFrame(requestRef.current);
     
     // The elapsed time is already tracked by our timer, no need to recalculate
-    console.log("Game over - elapsed time:", elapsedTime, "formatted as:", formatTime(elapsedTime));
   };
   
   // Save high score with player name
@@ -144,14 +143,6 @@ const WordCollectorGame = () => {
     }]
       .sort((a, b) => b.time - a.time) // Sort by longest time (descending)
       .slice(0, 5);
-    
-    // Log for debugging
-    console.log("Saving high score:", { 
-      name, 
-      time: elapsedTime, 
-      formattedTime: formatTime(elapsedTime),
-      points: Math.floor(score)
-    });
     
     setHighScores(newHighScores);
     setShowNameInput(false);
