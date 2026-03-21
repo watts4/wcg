@@ -2,41 +2,71 @@ import React, { useState, useEffect, useRef } from 'react';
 import words from 'an-array-of-english-words';
 import './WordCollectorGame.css';
 
+// Build a Set once at module load — O(1) lookups vs O(n) Array.includes
+const wordSet = new Set(words);
+
 const WordCollectorGame = () => {
   // Game states
   const [score, setScore] = useState(100);
-  const [highScores, setHighScores] = useState([]);
+  const [highScores, setHighScores] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('wcg-high-scores') || '[]');
+    } catch {
+      return [];
+    }
+  });
   const [gameOver, setGameOver] = useState(false);
   const [currentWord, setCurrentWord] = useState([]);
   const [fallingElements, setFallingElements] = useState([]);
   const [wordIsValid, setWordIsValid] = useState(false);
   const [gameStarted, setGameStarted] = useState(false);
   const [difficulty, setDifficulty] = useState(1);
-  const [lastClick, setLastClick] = useState({ id: null, time: 0 });
   const [fallSpeedMultiplier, setFallSpeedMultiplier] = useState(1.0);
   const [playerName, setPlayerName] = useState('');
   const [showNameInput, setShowNameInput] = useState(false);
-  // Add state for tracking game time - simplified
-  const [startTime, setStartTime] = useState(null);
   const [elapsedTime, setElapsedTime] = useState(0);
-  
+
   // Dragging states
   const [isDragging, setIsDragging] = useState(false);
   const [draggedId, setDraggedId] = useState(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  
+
   const gameAreaRef = useRef(null);
   const gameLoopRef = useRef(null);
   const generationLoopRef = useRef(null);
-  const requestRef = useRef(null);
   const timerRef = useRef(null);
-  
+
+  // Refs for stale closure fix — intervals always call the latest function version
+  const updateGameStateRef = useRef(null);
+  const generateNewElementRef = useRef(null);
+  const endGameRef = useRef(null);
+
+  // Refs that mirror state so interval callbacks read fresh values
+  const gameOverRef = useRef(false);
+  const isDraggingRef = useRef(false);
+  const draggedIdRef = useRef(null);
+  const difficultyRef = useRef(1);
+  const fallSpeedMultiplierRef = useRef(1.0);
+  const gameStartedRef = useRef(false);
+
+  useEffect(() => { gameOverRef.current = gameOver; }, [gameOver]);
+  useEffect(() => { isDraggingRef.current = isDragging; }, [isDragging]);
+  useEffect(() => { draggedIdRef.current = draggedId; }, [draggedId]);
+  useEffect(() => { difficultyRef.current = difficulty; }, [difficulty]);
+  useEffect(() => { fallSpeedMultiplierRef.current = fallSpeedMultiplier; }, [fallSpeedMultiplier]);
+  useEffect(() => { gameStartedRef.current = gameStarted; }, [gameStarted]);
+
+  // Persist high scores to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem('wcg-high-scores', JSON.stringify(highScores));
+  }, [highScores]);
+
   // Word validation function - requiring at least 3 letters
   const isValidWord = (word) => {
     const lowerWord = word.toLowerCase();
-    return lowerWord.length >= 3 && words.includes(lowerWord);
+    return lowerWord.length >= 3 && wordSet.has(lowerWord);
   };
-  
+
   // Word parts and their point values - only single letters with weighted distribution
   const wordParts = [
     // Letters with frequencies based on English language usage
@@ -70,18 +100,103 @@ const WordCollectorGame = () => {
 
   // Format seconds into a readable time string (e.g., "2m 45s")
   const formatTime = (seconds) => {
-    // Ensure we have a valid number and round to nearest integer
     const totalSeconds = Math.round(seconds || 0);
-    
     const minutes = Math.floor(totalSeconds / 60);
     const remainingSeconds = totalSeconds % 60;
-    
     if (minutes > 0) {
       return `${minutes}m ${remainingSeconds}s`;
     } else {
       return `${remainingSeconds}s`;
     }
   };
+
+  // Game over function
+  const endGame = () => {
+    setGameOver(true);
+    setGameStarted(false);
+    setShowNameInput(true);
+    clearInterval(gameLoopRef.current);
+    clearInterval(generationLoopRef.current);
+    clearInterval(timerRef.current);
+  };
+  endGameRef.current = endGame;
+
+  // Generate new word parts or letters
+  const generateNewElement = () => {
+    if (!gameAreaRef.current || gameOverRef.current) return;
+
+    const gameWidth = gameAreaRef.current.offsetWidth;
+    const randomPart = wordParts[Math.floor(Math.random() * wordParts.length)];
+    const xPosition = Math.random() * (gameWidth - 60);
+
+    const newElement = {
+      id: Date.now() + Math.random(),
+      part: randomPart.part,
+      value: randomPart.value,
+      x: xPosition,
+      y: 0,
+      speed: (2.0 + Math.random() * difficultyRef.current * 1.0) * fallSpeedMultiplierRef.current,
+      selected: false,
+      width: 50,
+      height: 50
+    };
+
+    setFallingElements(prev => [...prev, newElement]);
+  };
+  generateNewElementRef.current = generateNewElement;
+
+  // Update game state (game loop callback)
+  const updateGameState = () => {
+    if (gameOverRef.current) return;
+
+    setFallingElements(prev => {
+      return prev.map(element => {
+        if (isDraggingRef.current && element.id === draggedIdRef.current) {
+          return element;
+        }
+
+        const newY = element.y + element.speed;
+
+        if (newY > (gameAreaRef.current?.offsetHeight || 600) - element.height) {
+          if (element.selected) {
+            setCurrentWord(prevWord =>
+              prevWord.filter(word => word.id !== element.id)
+            );
+          }
+
+          setScore(prevScore => {
+            const newScore = prevScore - element.value;
+            if (newScore <= 0) {
+              endGameRef.current();
+              return 0;
+            }
+            return newScore;
+          });
+
+          setFallSpeedMultiplier(prev => {
+            const increase = 0.15 * element.value;
+            return Math.min(prev + increase, 12.0);
+          });
+
+          return null;
+        }
+
+        return { ...element, y: newY };
+      }).filter(Boolean);
+    });
+
+    if (gameStartedRef.current && Math.random() < 0.001) {
+      setDifficulty(prev => Math.min(prev + 0.2, 10));
+    }
+
+    if (gameStartedRef.current && generationLoopRef.current && Math.random() < 0.02) {
+      clearInterval(generationLoopRef.current);
+      generationLoopRef.current = setInterval(() => {
+        generateNewElementRef.current();
+      }, Math.max(200, 1200 - (difficultyRef.current * 150) - (fallSpeedMultiplierRef.current * 150)));
+    }
+  };
+  updateGameStateRef.current = updateGameState;
 
   // Start the game
   const startGame = () => {
@@ -93,199 +208,69 @@ const WordCollectorGame = () => {
     setFallingElements([]);
     setDifficulty(1);
     setFallSpeedMultiplier(1.0);
-    
-    // Initialize the timer - start from 0 and count up
-    setStartTime(Date.now());
     setElapsedTime(0);
-    
-    // Set up timer to update elapsed time every 100ms for smoother updates
+
     timerRef.current = setInterval(() => {
-      setElapsedTime(prevTime => {
-        // Increment by 0.1 second every 100ms
-        return prevTime + 0.1;
-      });
+      setElapsedTime(prevTime => prevTime + 0.1);
     }, 100);
 
-    // Set up game loops
     gameLoopRef.current = setInterval(() => {
-      updateGameState();
+      updateGameStateRef.current();
     }, 50);
 
     generationLoopRef.current = setInterval(() => {
-      generateNewElement();
-    }, 1200 - difficulty * 150); // Even faster generation
+      generateNewElementRef.current();
+    }, 1200 - difficulty * 150);
   };
 
-  // Game over function
-  const endGame = () => {
-    setGameOver(true);
-    setGameStarted(false);
-    setShowNameInput(true);
-    
-    // Stop all game timers
-    clearInterval(gameLoopRef.current);
-    clearInterval(generationLoopRef.current);
-    clearInterval(timerRef.current);
-    cancelAnimationFrame(requestRef.current);
-    
-    // The elapsed time is already tracked by our timer, no need to recalculate
-    console.log("Game over - elapsed time:", elapsedTime, "formatted as:", formatTime(elapsedTime));
-  };
-  
   // Save high score with player name
   const saveHighScore = () => {
     const name = playerName.trim() || 'Anonymous';
-    
-    // Store both time and points
-    const newHighScores = [...highScores, { 
-      name, 
+
+    const newHighScores = [...highScores, {
+      name,
       time: elapsedTime,
       points: Math.floor(score)
     }]
-      .sort((a, b) => b.time - a.time) // Sort by longest time (descending)
+      .sort((a, b) => b.time - a.time)
       .slice(0, 5);
-    
-    // Log for debugging
-    console.log("Saving high score:", { 
-      name, 
-      time: elapsedTime, 
-      formattedTime: formatTime(elapsedTime),
-      points: Math.floor(score)
-    });
-    
+
     setHighScores(newHighScores);
     setShowNameInput(false);
     setPlayerName('');
   };
 
-  // Generate new word parts or letters
-  const generateNewElement = () => {
-    if (!gameAreaRef.current || gameOver) return;
-    
-    const gameWidth = gameAreaRef.current.offsetWidth;
-    const randomPart = wordParts[Math.floor(Math.random() * wordParts.length)];
-    const xPosition = Math.random() * (gameWidth - 60);
-    
-    const newElement = {
-      id: Date.now() + Math.random(), // Ensure unique IDs
-      part: randomPart.part,
-      value: randomPart.value,
-      x: xPosition,
-      y: 0,
-      speed: (2.0 + Math.random() * difficulty * 1.0) * fallSpeedMultiplier, // Much higher base speed
-      selected: false,
-      width: 50,
-      height: 50
-    };
-    
-    setFallingElements(prev => [...prev, newElement]);
-  };
-
-  // Update game state (animation frame loop)
-  const updateGameState = () => {
-    if (gameOver) return;
-    
-    // Update falling elements
-    setFallingElements(prev => {
-      return prev.map(element => {
-        // Skip position update for elements being dragged
-        if (isDragging && element.id === draggedId) {
-          return element;
-        }
-        
-        // Always continue falling, even if selected
-        const newY = element.y + element.speed;
-        
-        // Check if element hit bottom
-        if (newY > (gameAreaRef.current?.offsetHeight || 600) - element.height) {
-          // If it was selected, remove from current word
-          if (element.selected) {
-            setCurrentWord(prevWord => 
-              prevWord.filter(word => word.id !== element.id)
-            );
-          }
-          
-          // Penalize player - full point value lost
-          setScore(prevScore => {
-            const newScore = prevScore - element.value;
-            if (newScore <= 0) {
-              endGame();
-              return 0;
-            }
-            return newScore;
-          });
-          
-          // Increase fall speed based on letter value - dramatically more aggressive
-          setFallSpeedMultiplier(prev => {
-            // Tripled increase rate - much faster progression
-            const increase = 0.15 * element.value; 
-            // Increased max speed cap to 12.0x 
-            return Math.min(prev + increase, 12.0);
-          });
-          
-          // Remove the element
-          return null;
-        }
-        
-        return { ...element, y: newY };
-      }).filter(Boolean);
-    });
-    
-    // Increase difficulty more rapidly over time
-    if (gameStarted && score > 0 && Math.random() < 0.001) { // Doubled chance
-      setDifficulty(prev => Math.min(prev + 0.2, 10)); // Doubled increase and higher cap
-    }
-    
-    // Periodically adjust generation interval based on current difficulty and speed
-    if (gameStarted && generationLoopRef.current && Math.random() < 0.02) { // Doubled chance
-      clearInterval(generationLoopRef.current);
-      generationLoopRef.current = setInterval(() => {
-        generateNewElement();
-      }, Math.max(200, 1200 - (difficulty * 150) - (fallSpeedMultiplier * 150))); // Faster minimum and generation
-    }
-  };
-  
   // Check if word is valid whenever currentWord changes
   useEffect(() => {
     if (currentWord.length === 0) {
       setWordIsValid(false);
       return;
     }
-    
+
     const wordString = currentWord.map(word => word.part).join('').toLowerCase();
     const isValid = isValidWord(wordString);
-    
-    // If we just found a valid word
+
     if (isValid && !wordIsValid) {
-      // Calculate points
       const wordScore = currentWord.reduce((sum, part) => sum + part.value, 0);
       const lengthBonus = currentWord.reduce((sum, part) => sum + part.part.length, 0) * 0.5;
       const totalPoints = wordScore + lengthBonus;
-      
-      // Award points
+
       setScore(prev => prev + totalPoints);
-      
-      // Decrease fall speed based on points earned - less impact to make game harder
+
       setFallSpeedMultiplier(prev => {
-        // Reduced slowdown effect for challenge
         const decrease = 0.01 * totalPoints;
-        // Don't go below the base speed (1.0)
         return Math.max(prev - decrease, 1.0);
       });
-      
-      // Get IDs to remove
+
       const idsToRemove = currentWord.map(item => item.id);
-      
-      // Remove selected elements from game
-      setFallingElements(prev => 
+      setFallingElements(prev =>
         prev.filter(element => !idsToRemove.includes(element.id))
       );
-      
-      // Clear current word
+
       setTimeout(() => {
         setCurrentWord([]);
         setWordIsValid(false);
-      }, 300); // Short delay for feedback
+      }, 300);
     } else {
       setWordIsValid(isValid);
     }
@@ -295,21 +280,17 @@ const WordCollectorGame = () => {
   const handleMouseDown = (elementId, event) => {
     const element = fallingElements.find(el => el.id === elementId);
     if (!element) return;
-    
-    // Record the initial position where the user clicked relative to the element
+
     const offsetX = event.clientX - element.x;
     const offsetY = event.clientY - element.y;
     setDragOffset({ x: offsetX, y: offsetY });
-    
-    // Start tracking this element for potential dragging
     setDraggedId(elementId);
   };
 
   // Handle mouse/touch move for dragging
   const handleMouseMove = (event) => {
     if (!draggedId) return;
-    
-    // If we move more than 5px, consider it a drag
+
     if (!isDragging) {
       const moveDistance = Math.abs(event.movementX) + Math.abs(event.movementY);
       if (moveDistance > 5) {
@@ -317,8 +298,7 @@ const WordCollectorGame = () => {
       }
       return;
     }
-    
-    // Update the element position based on mouse/touch movement
+
     setFallingElements(prev => prev.map(element => {
       if (element.id === draggedId) {
         return {
@@ -333,12 +313,10 @@ const WordCollectorGame = () => {
 
   // Handle mouse/touch up for dragging or clicking
   const handleMouseUp = (elementId) => {
-    // If we weren't dragging, treat it as a click (select/deselect)
     if (draggedId === elementId && !isDragging) {
       handleElementClick(elementId);
     }
-    
-    // Reset dragging state
+
     setIsDragging(false);
     setDraggedId(null);
   };
@@ -346,41 +324,29 @@ const WordCollectorGame = () => {
   // Handle click on a falling element
   const handleElementClick = (elementId) => {
     if (gameOver) return;
-    
-    const now = Date.now();
+
     const element = fallingElements.find(el => el.id === elementId);
-    
     if (!element) return;
-    
-    // Update last click for double click detection
-    setLastClick({ id: elementId, time: now });
-    
-    // Toggle selection - if already selected, deselect it
+
     if (element.selected) {
-      // Remove from current word
       setCurrentWord(prev => prev.filter(word => word.id !== elementId));
-      
-      // Update element to deselected state
-      setFallingElements(prev => 
-        prev.map(el => 
-          el.id === elementId 
-            ? { ...el, selected: false } 
+      setFallingElements(prev =>
+        prev.map(el =>
+          el.id === elementId
+            ? { ...el, selected: false }
             : el
         )
       );
     } else {
-      // Not selected yet, add to current word
-      setCurrentWord(prev => [...prev, { 
-        id: element.id, 
-        part: element.part, 
-        value: element.value 
+      setCurrentWord(prev => [...prev, {
+        id: element.id,
+        part: element.part,
+        value: element.value
       }]);
-      
-      // Mark as selected
-      setFallingElements(prev => 
-        prev.map(el => 
-          el.id === elementId 
-            ? { ...el, selected: true } 
+      setFallingElements(prev =>
+        prev.map(el =>
+          el.id === elementId
+            ? { ...el, selected: true }
             : el
         )
       );
@@ -390,9 +356,7 @@ const WordCollectorGame = () => {
   // Reset word selection
   const resetWordSelection = () => {
     setCurrentWord([]);
-    
-    // Unselect all elements but keep them falling
-    setFallingElements(prev => 
+    setFallingElements(prev =>
       prev.map(element => ({
         ...element,
         selected: false
@@ -406,7 +370,6 @@ const WordCollectorGame = () => {
       clearInterval(gameLoopRef.current);
       clearInterval(generationLoopRef.current);
       clearInterval(timerRef.current);
-      cancelAnimationFrame(requestRef.current);
     };
   }, []);
 
@@ -424,13 +387,13 @@ const WordCollectorGame = () => {
             Tap falling letters to create words. Drag letters to move them around.
             Don't let them hit the bottom!
           </p>
-          <button 
+          <button
             onClick={startGame}
             className="start-button"
           >
             Start Game
           </button>
-          
+
           {highScores.length > 0 && (
             <div className="high-scores">
               <h2 className="high-scores-title">High Scores</h2>
@@ -439,7 +402,7 @@ const WordCollectorGame = () => {
                   <div key={index} className="high-score-item">
                     <span>#{index + 1}: {scoreEntry.name}</span>
                     <span>
-                      {formatTime(scoreEntry.time)} 
+                      {formatTime(scoreEntry.time)}
                       {scoreEntry.points !== undefined && ` (${scoreEntry.points} pts)`}
                     </span>
                   </div>
@@ -453,13 +416,13 @@ const WordCollectorGame = () => {
           <h1 className="title">Game Over</h1>
           <p className="score">Your Time: {formatTime(elapsedTime)}</p>
           <p className="score">Points: {Math.floor(score)}</p>
-          
+
           {showNameInput ? (
             <div className="name-input-container">
               <p>Enter your name for the high score:</p>
-              <input 
-                type="text" 
-                value={playerName} 
+              <input
+                type="text"
+                value={playerName}
                 onChange={handleNameChange}
                 className="name-input"
                 maxLength={15}
@@ -477,7 +440,7 @@ const WordCollectorGame = () => {
                   <div key={index} className="high-score-item">
                     <span>#{index + 1}: {scoreEntry.name}</span>
                     <span>
-                      {formatTime(scoreEntry.time)} 
+                      {formatTime(scoreEntry.time)}
                       {scoreEntry.points !== undefined && ` (${scoreEntry.points} pts)`}
                     </span>
                   </div>
@@ -485,8 +448,8 @@ const WordCollectorGame = () => {
               </div>
             </div>
           )}
-          
-          <button 
+
+          <button
             onClick={startGame}
             className="start-button"
           >
@@ -507,10 +470,10 @@ const WordCollectorGame = () => {
               <span className="level">Level: {Math.floor(difficulty)} (Speed: {fallSpeedMultiplier.toFixed(2)}x)</span>
             </div>
           </div>
-          
+
           {/* Game Area */}
-          <div 
-            ref={gameAreaRef} 
+          <div
+            ref={gameAreaRef}
             className="play-area"
             onMouseMove={handleMouseMove}
             onMouseUp={() => {
@@ -519,10 +482,10 @@ const WordCollectorGame = () => {
             }}
             onTouchMove={(e) => {
               const touch = e.touches[0];
-              handleMouseMove({ 
-                clientX: touch.clientX, 
+              handleMouseMove({
+                clientX: touch.clientX,
                 clientY: touch.clientY,
-                movementX: 10, // Force it to be considered a drag on touch
+                movementX: 10,
                 movementY: 10
               });
             }}
@@ -556,7 +519,7 @@ const WordCollectorGame = () => {
               </div>
             ))}
           </div>
-          
+
           {/* Word Building Area */}
           <div className="word-building-area">
             <div className="current-word">
@@ -567,20 +530,20 @@ const WordCollectorGame = () => {
                 </div>
               ))}
             </div>
-            
+
             <div className="word-controls">
-              <button 
+              <button
                 onClick={resetWordSelection}
                 className="reset-button"
               >
                 Reset Word
               </button>
-              
+
               <div className="word-status">
                 {currentWord.length > 0 && (
                   <span className={wordIsValid ? 'valid-word' : 'invalid-word'}>
-                    {wordIsValid 
-                      ? 'Valid word! Points awarded.' 
+                    {wordIsValid
+                      ? 'Valid word! Points awarded.'
                       : 'Keep building your word... (need at least 3 letters)'}
                   </span>
                 )}
