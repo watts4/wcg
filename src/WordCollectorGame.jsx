@@ -220,7 +220,7 @@ const WordCollectorGame = () => {
 
     generationLoopRef.current = setInterval(() => {
       generateNewElementRef.current();
-    }, 1200 - difficulty * 150);
+    }, 1200 - 1 * 150); // difficulty resets to 1; use literal to avoid stale closure
   };
 
   // Save high score with player name
