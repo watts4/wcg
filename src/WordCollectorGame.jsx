@@ -251,6 +251,7 @@ const WordCollectorGame = () => {
     const isValid = isValidWord(wordString);
 
     if (isValid && !wordIsValid) {
+      setWordIsValid(true); // Mark as awarded immediately to prevent double-scoring within 300ms window
       const wordScore = currentWord.reduce((sum, part) => sum + part.value, 0);
       const lengthBonus = currentWord.reduce((sum, part) => sum + part.part.length, 0) * 0.5;
       const totalPoints = wordScore + lengthBonus;
@@ -274,7 +275,7 @@ const WordCollectorGame = () => {
     } else {
       setWordIsValid(isValid);
     }
-  }, [currentWord]);
+  }, [currentWord, wordIsValid]);
 
   // Handle mouse/touch down for dragging
   const handleMouseDown = (elementId, event) => {
