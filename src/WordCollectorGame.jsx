@@ -1,9 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
-import words from 'an-array-of-english-words';
 import './WordCollectorGame.css';
 
-// Build a Set once at module load — O(1) lookups vs O(n) Array.includes
-const wordSet = new Set(words);
+// Lazy-load the wordlist on first need so it's split into its own chunk
+// instead of bloating the initial JS bundle. The promise is cached so
+// repeated calls reuse the in-flight or resolved load.
+let wordSetPromise = null;
+const loadWordSet = () => {
+  if (!wordSetPromise) {
+    wordSetPromise = import('an-array-of-english-words').then(
+      ({ default: words }) => new Set(words)
+    );
+  }
+  return wordSetPromise;
+};
 
 const WordCollectorGame = () => {
   // Game states
@@ -25,6 +34,8 @@ const WordCollectorGame = () => {
   const [playerName, setPlayerName] = useState('');
   const [showNameInput, setShowNameInput] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
+  const [isLoadingWordlist, setIsLoadingWordlist] = useState(false);
+  const wordSetRef = useRef(null);
 
   // Dragging states
   const [isDragging, setIsDragging] = useState(false);
@@ -64,7 +75,11 @@ const WordCollectorGame = () => {
   // Word validation function - requiring at least 3 letters
   const isValidWord = (word) => {
     const lowerWord = word.toLowerCase();
-    return lowerWord.length >= 3 && wordSet.has(lowerWord);
+    if (lowerWord.length < 3) return false;
+    // wordSetRef is populated once the lazy chunk has loaded; before that
+    // we conservatively reject so we don't false-validate during the
+    // tiny window between Start Game click and chunk arrival.
+    return wordSetRef.current ? wordSetRef.current.has(lowerWord) : false;
   };
 
   // Word parts and their point values - only single letters with weighted distribution
@@ -198,8 +213,28 @@ const WordCollectorGame = () => {
   };
   updateGameStateRef.current = updateGameState;
 
+  // Pre-warm the wordlist chunk just after first paint so the user
+  // rarely waits when they click Start Game.
+  useEffect(() => {
+    if (wordSetRef.current) return;
+    const handle = setTimeout(() => {
+      loadWordSet().then(set => { wordSetRef.current = set; }).catch(() => {});
+    }, 0);
+    return () => clearTimeout(handle);
+  }, []);
+
   // Start the game
-  const startGame = () => {
+  const startGame = async () => {
+    // Ensure the wordlist is loaded before gameplay begins.
+    if (!wordSetRef.current) {
+      setIsLoadingWordlist(true);
+      try {
+        wordSetRef.current = await loadWordSet();
+      } finally {
+        setIsLoadingWordlist(false);
+      }
+    }
+
     setGameStarted(true);
     setGameOver(false);
     setShowNameInput(false);
@@ -391,8 +426,9 @@ const WordCollectorGame = () => {
           <button
             onClick={startGame}
             className="start-button"
+            disabled={isLoadingWordlist}
           >
-            Start Game
+            {isLoadingWordlist ? 'Loading dictionary…' : 'Start Game'}
           </button>
 
           {highScores.length > 0 && (
@@ -453,8 +489,9 @@ const WordCollectorGame = () => {
           <button
             onClick={startGame}
             className="start-button"
+            disabled={isLoadingWordlist}
           >
-            Play Again
+            {isLoadingWordlist ? 'Loading dictionary…' : 'Play Again'}
           </button>
         </div>
       ) : (
