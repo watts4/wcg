@@ -24,5 +24,5 @@ Live at [watts4.github.io/wcg](https://watts4.github.io/wcg/)
 
 ## Stack
 
-- React (Create React App)
+- React + Vite
 - Deployed to GitHub Pages
