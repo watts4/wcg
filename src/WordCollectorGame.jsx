@@ -35,6 +35,7 @@ const WordCollectorGame = () => {
   const [showNameInput, setShowNameInput] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [isLoadingWordlist, setIsLoadingWordlist] = useState(false);
+  const [wordlistError, setWordlistError] = useState(false);
   const wordSetRef = useRef(null);
 
   // Dragging states
@@ -228,8 +229,12 @@ const WordCollectorGame = () => {
     // Ensure the wordlist is loaded before gameplay begins.
     if (!wordSetRef.current) {
       setIsLoadingWordlist(true);
+      setWordlistError(false);
       try {
         wordSetRef.current = await loadWordSet();
+      } catch {
+        setWordlistError(true);
+        return;
       } finally {
         setIsLoadingWordlist(false);
       }
@@ -414,6 +419,18 @@ const WordCollectorGame = () => {
     setPlayerName(e.target.value);
   };
 
+  // Browsers cache a failed dynamic import for the life of the page, so
+  // retrying import() can't recover; a reload fetches fresh assets (this
+  // also covers a deploy that renamed the hashed chunk mid-session).
+  const wordlistErrorMessage = wordlistError && (
+    <div className="name-input-container">
+      <p className="invalid-word">Couldn't load the dictionary.</p>
+      <button onClick={() => window.location.reload()} className="save-score-button">
+        Reload page
+      </button>
+    </div>
+  );
+
   return (
     <div className="game-container">
       {!gameStarted && !gameOver ? (
@@ -430,6 +447,7 @@ const WordCollectorGame = () => {
           >
             {isLoadingWordlist ? 'Loading dictionary…' : 'Start Game'}
           </button>
+          {wordlistErrorMessage}
 
           {highScores.length > 0 && (
             <div className="high-scores">
