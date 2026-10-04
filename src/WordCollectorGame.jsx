@@ -50,7 +50,6 @@ const WordCollectorGame = () => {
   // Refs for stale closure fix — intervals always call the latest function version
   const updateGameStateRef = useRef(null);
   const generateNewElementRef = useRef(null);
-  const endGameRef = useRef(null);
 
   // Refs that mirror state so interval callbacks read fresh values
   const gameOverRef = useRef(false);
@@ -134,7 +133,6 @@ const WordCollectorGame = () => {
     clearInterval(generationLoopRef.current);
     clearInterval(timerRef.current);
   };
-  endGameRef.current = endGame;
 
   // Generate new word parts or letters
   const generateNewElement = () => {
@@ -164,41 +162,22 @@ const WordCollectorGame = () => {
   const updateGameState = () => {
     if (gameOverRef.current) return;
 
-    setFallingElements(prev => {
-      return prev.map(element => {
-        if (isDraggingRef.current && element.id === draggedIdRef.current) {
-          return element;
-        }
+    // Keep this updater pure: React may invoke it more than once (StrictMode
+    // does so deliberately). Letters that reach the bottom are only marked
+    // `missed` here; the penalty effect below applies them exactly once.
+    const bottom = gameAreaRef.current?.offsetHeight || 600;
+    setFallingElements(prev => prev.map(element => {
+      if (element.missed) return element;
+      if (isDraggingRef.current && element.id === draggedIdRef.current) {
+        return element;
+      }
 
-        const newY = element.y + element.speed;
-
-        if (newY > (gameAreaRef.current?.offsetHeight || 600) - element.height) {
-          if (element.selected) {
-            setCurrentWord(prevWord =>
-              prevWord.filter(word => word.id !== element.id)
-            );
-          }
-
-          setScore(prevScore => {
-            const newScore = prevScore - element.value;
-            if (newScore <= 0) {
-              endGameRef.current();
-              return 0;
-            }
-            return newScore;
-          });
-
-          setFallSpeedMultiplier(prev => {
-            const increase = 0.15 * element.value;
-            return Math.min(prev + increase, 12.0);
-          });
-
-          return null;
-        }
-
-        return { ...element, y: newY };
-      }).filter(Boolean);
-    });
+      const newY = element.y + element.speed;
+      if (newY > bottom - element.height) {
+        return { ...element, missed: true };
+      }
+      return { ...element, y: newY };
+    }));
 
     if (gameStartedRef.current && Math.random() < 0.001) {
       setDifficulty(prev => Math.min(prev + 0.2, 10));
@@ -212,6 +191,28 @@ const WordCollectorGame = () => {
     }
   };
   updateGameStateRef.current = updateGameState;
+
+  // Apply penalties for letters that hit the bottom, then remove them.
+  // Effects run once per commit, so each missed letter is penalised once.
+  useEffect(() => {
+    const missed = fallingElements.filter(element => element.missed);
+    if (missed.length === 0) return;
+
+    const missedIds = new Set(missed.map(element => element.id));
+    const missedValue = missed.reduce((sum, element) => sum + element.value, 0);
+
+    setFallingElements(prev => prev.filter(element => !missedIds.has(element.id)));
+    setCurrentWord(prev => prev.filter(word => !missedIds.has(word.id)));
+    setScore(prev => Math.max(prev - missedValue, 0));
+    setFallSpeedMultiplier(prev => Math.min(prev + 0.15 * missedValue, 12.0));
+  }, [fallingElements]);
+
+  // End the game once the score is exhausted
+  useEffect(() => {
+    if (gameStarted && score <= 0) {
+      endGame();
+    }
+  }, [score, gameStarted]);
 
   // Pre-warm the wordlist chunk just after first paint so the user
   // rarely waits when they click Start Game.
@@ -533,7 +534,7 @@ const WordCollectorGame = () => {
             }}
           >
             {/* Falling Elements */}
-            {fallingElements.map(element => (
+            {fallingElements.filter(element => !element.missed).map(element => (
               <div
                 key={element.id}
                 className={`falling-element ${element.selected ? 'selected' : ''}`}
